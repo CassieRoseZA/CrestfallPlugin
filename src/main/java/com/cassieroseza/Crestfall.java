@@ -1,17 +1,11 @@
 package com.cassieroseza;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import me.clip.placeholderapi.PlaceholderAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
-import org.bukkit.Keyed;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Registry;
 import org.bukkit.Sound;
@@ -20,18 +14,6 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabExecutor;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.Listener;
-import org.bukkit.event.inventory.CraftItemEvent;
-import org.bukkit.event.player.PlayerJoinEvent;
-import org.bukkit.event.player.PlayerMoveEvent;
-import org.bukkit.inventory.CookingRecipe;
-import org.bukkit.inventory.FurnaceRecipe;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.Recipe;
-import org.bukkit.inventory.ShapedRecipe;
-import org.bukkit.inventory.ShapelessRecipe;
-import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -48,24 +30,20 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public final class Crestfall extends JavaPlugin implements TabExecutor, Listener {
+public final class Crestfall extends JavaPlugin implements TabExecutor {
 
     private static final DateTimeFormatter CLOCK_FORMAT = DateTimeFormatter.ofPattern("HH:mm");
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final Pattern CMI_GRADIENT_PATTERN = Pattern.compile("(?i)\\{#([0-9a-f]{6})>}(.+?)\\{#([0-9a-f]{6})<}");
     private static final Pattern CMI_HEX_PATTERN = Pattern.compile("(?i)[{<]#([0-9a-f]{6})[}>]");
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final LegacyComponentSerializer LEGACY_SERIALIZER = LegacyComponentSerializer.builder()
             .character('&')
             .hexColors()
@@ -74,9 +52,6 @@ public final class Crestfall extends JavaPlugin implements TabExecutor, Listener
 
     private final List<String> announcements = new ArrayList<>();
     private final List<TimeWindow> oddHourWindows = new ArrayList<>();
-    private final Map<NamespacedKey, CustomRecipeDefinition> customRecipes = new HashMap<>();
-    private final Set<NamespacedKey> registeredCustomRecipeKeys = new LinkedHashSet<>();
-    private final Set<NamespacedKey> hiddenFromGlobalSyncRecipeKeys = new LinkedHashSet<>();
 
     private BukkitTask scheduler;
     private ZoneId zoneId = ZoneId.systemDefault();
@@ -88,20 +63,15 @@ public final class Crestfall extends JavaPlugin implements TabExecutor, Listener
     public void onEnable() {
         saveDefaultConfig();
         saveResourceIfMissing("announcements.txt");
-        saveRecipeTemplateIfMissing();
         reloadLoreConfig();
-        reloadCustomRecipes();
 
         if (getCommand("crestfall") != null) {
             getCommand("crestfall").setExecutor(this);
             getCommand("crestfall").setTabCompleter(this);
         }
-        Bukkit.getPluginManager().registerEvents(this, this);
 
         startScheduler();
-        scheduleRecipeSyncForOnlinePlayers();
         getLogger().info("Crestfall loaded with " + announcements.size() + " announcement lines.");
-        getLogger().info("Crestfall loaded " + customRecipes.size() + " custom recipes.");
         getLogger().info("PlaceholderAPI support: " + (isPlaceholderApiEnabled() ? "enabled" : "not detected"));
     }
 
@@ -127,10 +97,8 @@ public final class Crestfall extends JavaPlugin implements TabExecutor, Listener
 
             reloadConfig();
             reloadLoreConfig();
-            reloadCustomRecipes();
-            startScheduler();
-            scheduleRecipeSyncForOnlinePlayers();
-            sender.sendMessage(color("&aCrestfall reloaded. Loaded &f" + announcements.size() + " &alines and &f" + customRecipes.size() + " &arecipes."));
+                startScheduler();
+                sender.sendMessage(color("&aCrestfall reloaded. Loaded &f" + announcements.size() + " &alines."));
             return true;
         }
 
@@ -150,12 +118,7 @@ public final class Crestfall extends JavaPlugin implements TabExecutor, Listener
             return true;
         }
 
-        if (args[0].equalsIgnoreCase("recipesync")) {
-            handleRecipeSyncCommand(sender, args);
-            return true;
-        }
-
-        sender.sendMessage(color("&cUsage: /" + label + " <status|reload|force|recipesync>"));
+        sender.sendMessage(color("&cUsage: /" + label + " <status|reload|force>"));
         return true;
     }
 
@@ -163,7 +126,7 @@ public final class Crestfall extends JavaPlugin implements TabExecutor, Listener
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
             List<String> completions = new ArrayList<>();
-            for (String option : Arrays.asList("status", "reload", "force", "recipesync")) {
+            for (String option : Arrays.asList("status", "reload", "force")) {
                 if (option.startsWith(args[0].toLowerCase(Locale.ROOT))) {
                     completions.add(option);
                 }
@@ -171,148 +134,7 @@ public final class Crestfall extends JavaPlugin implements TabExecutor, Listener
             return completions;
         }
 
-        if (args.length == 2 && args[0].equalsIgnoreCase("recipesync")) {
-            List<String> completions = new ArrayList<>();
-            List<String> options = new ArrayList<>();
-            options.add("all");
-            for (Player player : Bukkit.getOnlinePlayers()) {
-                options.add(player.getName());
-            }
-            for (String option : options) {
-                if (option.toLowerCase(Locale.ROOT).startsWith(args[1].toLowerCase(Locale.ROOT))) {
-                    completions.add(option);
-                }
-            }
-            return completions;
-        }
-
         return Collections.emptyList();
-    }
-
-    @EventHandler
-    public void onPlayerJoin(PlayerJoinEvent event) {
-        discoverRecipesForTrigger(event.getPlayer(), "join");
-
-        if (!getConfig().getBoolean("recipe-sync.enabled", true) || !getConfig().getBoolean("recipe-sync.sync-on-join", true)) {
-            return;
-        }
-
-        long delayTicks = Math.max(0L, getConfig().getLong("recipe-sync.join-delay-ticks", 60L));
-        Bukkit.getScheduler().runTaskLater(this, () -> {
-            if (event.getPlayer().isOnline()) {
-                syncRecipesToPlayer(event.getPlayer());
-            }
-        }, delayTicks);
-    }
-
-    @EventHandler
-    public void onPlayerMove(PlayerMoveEvent event) {
-        if (event.getTo() == null || event.getFrom().getBlock().equals(event.getTo().getBlock())) {
-            return;
-        }
-
-        for (CustomRecipeDefinition definition : customRecipes.values()) {
-            LocationUnlock location = definition.locationUnlock();
-            if (location == null || event.getPlayer().hasDiscoveredRecipe(definition.key())) {
-                continue;
-            }
-
-            if (location.matches(event.getPlayer())) {
-                event.getPlayer().discoverRecipe(definition.key());
-                if (!location.message().isBlank()) {
-                    event.getPlayer().sendMessage(renderMessage(location.message(), event.getPlayer()));
-                }
-            }
-        }
-    }
-
-    @EventHandler
-    public void onCraftItem(CraftItemEvent event) {
-        if (!(event.getWhoClicked() instanceof Player player) || !(event.getRecipe() instanceof Keyed keyedRecipe)) {
-            return;
-        }
-
-        String craftedKey = keyedRecipe.getKey().toString();
-        for (CustomRecipeDefinition definition : customRecipes.values()) {
-            CraftUnlock craftUnlock = definition.craftUnlock();
-            if (craftUnlock == null || player.hasDiscoveredRecipe(definition.key())) {
-                continue;
-            }
-
-            if (craftUnlock.recipeKey().equalsIgnoreCase(craftedKey)) {
-                player.discoverRecipe(definition.key());
-                if (!craftUnlock.message().isBlank()) {
-                    player.sendMessage(renderMessage(craftUnlock.message(), player));
-                }
-            }
-        }
-    }
-
-    private void handleRecipeSyncCommand(CommandSender sender, String[] args) {
-        if (!sender.hasPermission("crestfall.recipesync")) {
-            sender.sendMessage(color("&cYou do not have permission to sync Crestfall recipes."));
-            return;
-        }
-
-        if (args.length >= 2 && !args[1].equalsIgnoreCase("all")) {
-            Player target = Bukkit.getPlayerExact(args[1]);
-            if (target == null) {
-                sender.sendMessage(color("&cThat player is not online."));
-                return;
-            }
-
-            int synced = syncRecipesToPlayer(target);
-            sender.sendMessage(color("&aSynced &f" + synced + " &arecipes to &f" + target.getName() + "&a."));
-            return;
-        }
-
-        SyncResult result = syncRecipesToOnlinePlayers();
-        sender.sendMessage(color("&aSynced &f" + result.recipeCount() + " &arecipes to &f" + result.playerCount() + " &aplayers."));
-    }
-
-    private void scheduleRecipeSyncForOnlinePlayers() {
-        if (!getConfig().getBoolean("recipe-sync.enabled", true) || !getConfig().getBoolean("recipe-sync.sync-online-players-on-enable", true)) {
-            return;
-        }
-
-        long delayTicks = Math.max(0L, getConfig().getLong("recipe-sync.startup-delay-ticks", 100L));
-        Bukkit.getScheduler().runTaskLater(this, () -> syncRecipesToOnlinePlayers(), delayTicks);
-    }
-
-    private SyncResult syncRecipesToOnlinePlayers() {
-        List<NamespacedKey> recipeKeys = collectRecipeKeys();
-        int players = 0;
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            player.discoverRecipes(recipeKeys);
-            players++;
-        }
-        return new SyncResult(recipeKeys.size(), players);
-    }
-
-    private int syncRecipesToPlayer(Player player) {
-        List<NamespacedKey> recipeKeys = collectRecipeKeys();
-        player.discoverRecipes(recipeKeys);
-        return recipeKeys.size();
-    }
-
-    private List<NamespacedKey> collectRecipeKeys() {
-        Set<NamespacedKey> keys = new LinkedHashSet<>();
-        boolean includeLockedCustomRecipes = getConfig().getBoolean("recipe-sync.include-locked-custom-recipes", false);
-        Iterator<Recipe> iterator = Bukkit.recipeIterator();
-        while (iterator.hasNext()) {
-            Recipe recipe = iterator.next();
-            if (recipe instanceof Keyed keyed) {
-                NamespacedKey key = keyed.getKey();
-                if (includeLockedCustomRecipes || !hiddenFromGlobalSyncRecipeKeys.contains(key)) {
-                    keys.add(key);
-                }
-            }
-        }
-
-        return new ArrayList<>(keys);
-    }
-
-    private record SyncResult(int recipeCount, int playerCount) {
     }
 
     private void reloadLoreConfig() {
@@ -333,210 +155,6 @@ public final class Crestfall extends JavaPlugin implements TabExecutor, Listener
 
         loadAnnouncements();
         resetDailyCounterIfNeeded();
-    }
-
-    private void reloadCustomRecipes() {
-        unregisterCustomRecipes();
-        customRecipes.clear();
-        hiddenFromGlobalSyncRecipeKeys.clear();
-
-        if (!getConfig().getBoolean("custom-recipes.enabled", true)) {
-            return;
-        }
-
-        File recipeDirectory = new File(getDataFolder(), "recipes");
-        if (!recipeDirectory.exists() && !recipeDirectory.mkdirs()) {
-            getLogger().warning("Could not create recipes directory.");
-            return;
-        }
-
-        File[] files = recipeDirectory.listFiles((directory, name) -> name.toLowerCase(Locale.ROOT).endsWith(".json"));
-        if (files == null) {
-            return;
-        }
-
-        for (File file : files) {
-            loadCustomRecipe(file);
-        }
-    }
-
-    private void unregisterCustomRecipes() {
-        for (NamespacedKey key : registeredCustomRecipeKeys) {
-            Bukkit.removeRecipe(key);
-        }
-        registeredCustomRecipeKeys.clear();
-    }
-
-    private void loadCustomRecipe(File file) {
-        try {
-            JsonObject root = JsonParser.parseString(Files.readString(file.toPath(), StandardCharsets.UTF_8)).getAsJsonObject();
-            if (!getBoolean(root, "enabled", true)) {
-                return;
-            }
-
-            NamespacedKey key = NamespacedKey.fromString(getString(root, "key", file.getName().replace(".json", "")), this);
-            if (key == null) {
-                getLogger().warning("Skipping recipe with invalid key in " + file.getName());
-                return;
-            }
-
-            Recipe recipe = createRecipe(root, key);
-            if (recipe == null) {
-                getLogger().warning("Skipping recipe with invalid recipe data in " + file.getName());
-                return;
-            }
-
-            Bukkit.addRecipe(recipe);
-            registeredCustomRecipeKeys.add(key);
-
-            CustomRecipeDefinition definition = createRecipeDefinition(root, key);
-            customRecipes.put(key, definition);
-            if (!definition.includeInGlobalSync()) {
-                hiddenFromGlobalSyncRecipeKeys.add(key);
-            }
-        } catch (Exception exception) {
-            getLogger().warning("Could not load recipe " + file.getName() + ": " + exception.getMessage());
-        }
-    }
-
-    private Recipe createRecipe(JsonObject root, NamespacedKey key) {
-        String type = getString(root, "type", "shaped").toLowerCase(Locale.ROOT);
-        ItemStack result = createItem(root.getAsJsonObject("result"));
-        if (result == null) {
-            return null;
-        }
-
-        return switch (type) {
-            case "shaped" -> createShapedRecipe(root, key, result);
-            case "shapeless" -> createShapelessRecipe(root, key, result);
-            case "furnace", "smelting" -> createFurnaceRecipe(root, key, result);
-            default -> null;
-        };
-    }
-
-    private ShapedRecipe createShapedRecipe(JsonObject root, NamespacedKey key, ItemStack result) {
-        ShapedRecipe recipe = new ShapedRecipe(key, result);
-        List<String> pattern = getStringList(root.get("pattern"));
-        if (pattern.isEmpty()) {
-            return null;
-        }
-        recipe.shape(pattern.toArray(String[]::new));
-
-        JsonObject ingredients = root.getAsJsonObject("ingredients");
-        if (ingredients == null) {
-            return null;
-        }
-
-        for (Map.Entry<String, JsonElement> entry : ingredients.entrySet()) {
-            Material material = Material.matchMaterial(entry.getValue().getAsString());
-            if (material == null || entry.getKey().isEmpty()) {
-                return null;
-            }
-            recipe.setIngredient(entry.getKey().charAt(0), material);
-        }
-        return recipe;
-    }
-
-    private ShapelessRecipe createShapelessRecipe(JsonObject root, NamespacedKey key, ItemStack result) {
-        ShapelessRecipe recipe = new ShapelessRecipe(key, result);
-        for (String ingredient : getStringList(root.get("ingredients"))) {
-            Material material = Material.matchMaterial(ingredient);
-            if (material == null) {
-                return null;
-            }
-            recipe.addIngredient(material);
-        }
-        return recipe;
-    }
-
-    private CookingRecipe<?> createFurnaceRecipe(JsonObject root, NamespacedKey key, ItemStack result) {
-        Material ingredient = Material.matchMaterial(getString(root, "ingredient", ""));
-        if (ingredient == null) {
-            return null;
-        }
-
-        float experience = getFloat(root, "experience", 0.0F);
-        int cookingTimeTicks = getInt(root, "cookingTimeTicks", 200);
-        return new FurnaceRecipe(key, result, ingredient, experience, cookingTimeTicks);
-    }
-
-    private ItemStack createItem(JsonObject object) {
-        if (object == null) {
-            return null;
-        }
-
-        Material material = Material.matchMaterial(getString(object, "material", ""));
-        if (material == null) {
-            return null;
-        }
-
-        ItemStack item = new ItemStack(material, Math.max(1, getInt(object, "amount", 1)));
-        ItemMeta meta = item.getItemMeta();
-        if (meta != null) {
-            String name = getString(object, "name", "");
-            if (!name.isBlank()) {
-                meta.displayName(renderMessage(name, null));
-            }
-
-            List<String> lore = getStringList(object.get("lore"));
-            if (!lore.isEmpty()) {
-                meta.lore(lore.stream().map(line -> renderMessage(line, null)).toList());
-            }
-
-            if (object.has("customModelData")) {
-                meta.setCustomModelData(getInt(object, "customModelData", 0));
-            }
-            item.setItemMeta(meta);
-        }
-        return item;
-    }
-
-    private CustomRecipeDefinition createRecipeDefinition(JsonObject root, NamespacedKey key) {
-        JsonObject discovery = root.getAsJsonObject("discovery");
-        if (discovery == null) {
-            return new CustomRecipeDefinition(key, true, null, null, false);
-        }
-
-        boolean includeInGlobalSync = getBoolean(discovery, "includeInGlobalSync", true);
-        boolean unlockOnJoin = getBoolean(discovery, "unlockOnJoin", false);
-        LocationUnlock locationUnlock = createLocationUnlock(discovery.getAsJsonObject("unlockAtLocation"));
-        CraftUnlock craftUnlock = createCraftUnlock(discovery.getAsJsonObject("unlockAfterCrafting"));
-        return new CustomRecipeDefinition(key, includeInGlobalSync, locationUnlock, craftUnlock, unlockOnJoin);
-    }
-
-    private LocationUnlock createLocationUnlock(JsonObject object) {
-        if (object == null || !getBoolean(object, "enabled", false)) {
-            return null;
-        }
-
-        return new LocationUnlock(
-                getString(object, "world", "world"),
-                getDouble(object, "x", 0.0D),
-                getDouble(object, "y", 64.0D),
-                getDouble(object, "z", 0.0D),
-                getDouble(object, "radius", 3.0D),
-                getString(object, "message", "")
-        );
-    }
-
-    private CraftUnlock createCraftUnlock(JsonObject object) {
-        if (object == null || !getBoolean(object, "enabled", false)) {
-            return null;
-        }
-
-        return new CraftUnlock(getString(object, "recipe", ""), getString(object, "message", ""));
-    }
-
-    private void discoverRecipesForTrigger(Player player, String trigger) {
-        if (!trigger.equals("join")) {
-            return;
-        }
-
-        for (CustomRecipeDefinition definition : customRecipes.values()) {
-            if (definition.unlockOnJoin()) {
-                player.discoverRecipe(definition.key());
-            }
-        }
     }
 
     private void startScheduler() {
@@ -669,7 +287,6 @@ public final class Crestfall extends JavaPlugin implements TabExecutor, Listener
         if (namespacedKey == null && !key.contains(":")) {
             namespacedKey = NamespacedKey.minecraft(key);
         }
-
         if (namespacedKey == null) {
             return null;
         }
@@ -692,8 +309,6 @@ public final class Crestfall extends JavaPlugin implements TabExecutor, Listener
         sender.sendMessage(color("&7Windows: &f" + (windows.length() == 0 ? "none" : windows)));
         sender.sendMessage(color("&7Announcements today: &f" + announcementsToday));
         sender.sendMessage(color("&7PlaceholderAPI: &f" + (isPlaceholderApiEnabled() ? "enabled" : "not detected")));
-        sender.sendMessage(color("&7Recipe sync: &f" + getConfig().getBoolean("recipe-sync.enabled", true)));
-        sender.sendMessage(color("&7Known recipes: &f" + collectRecipeKeys().size()));
         sender.sendMessage(color("&8&m--------------------------------"));
     }
 
