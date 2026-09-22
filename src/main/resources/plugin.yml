@@ -11,7 +11,7 @@ authors: [ CassieRoseZA ]
 commands:
   crestfall:
     description: Manage Crestfall lore announcements.
-    usage: /crestfall <status|reload|force|recipesync>
+    usage: /crestfall <status|reload|force>
     aliases: [ crest, cfall ]
 
 permissions:
@@ -20,7 +20,4 @@ permissions:
     default: op
   crestfall.force:
     description: Force a lore announcement immediately.
-    default: op
-  crestfall.recipesync:
-    description: Sync server recipe keys to online players.
     default: op
