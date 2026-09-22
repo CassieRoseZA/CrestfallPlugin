@@ -7,23 +7,6 @@ placeholderapi:
   # If PlaceholderAPI is installed, lore lines can use placeholders like %player_name%.
   enabled: true
 
-recipe-sync:
-  # Server-side recipe discovery sync. This pushes all Bukkit/Paper-visible recipe keys
-  # to players through the vanilla recipe discovery API.
-  #
-  # REI/JEI are client-side mods. A Paper plugin cannot directly populate their custom
-  # recipe panels without a matching client-side mod, but this keeps the server recipe
-  # book state as complete as Bukkit/Paper allows.
-  enabled: true
-
-  # Sync when a player joins. Useful after 1.21.2 recipe sync changes.
-  sync-on-join: true
-  join-delay-ticks: 60
-
-  # Also sync online players after plugin enable or /crestfall reload.
-  sync-online-players-on-enable: true
-  startup-delay-ticks: 100
-
 # Java timezone ID. Examples: Africa/Johannesburg, UTC, America/New_York.
 timezone: "Africa/Johannesburg"
 
